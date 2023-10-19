@@ -1,0 +1,74 @@
+#!/bin/bash
+
+function docker_api {
+    local host
+    local path=${1:-/}
+    local method=${2:-GET}
+    local data=${3:-}
+    local curl_opts=(-s)
+
+    if [ "$method" = 'POST' ]; then
+        curl_opts+=(-d "$data")
+        if [ -n "$data" ]; then
+            curl_opts+=(-H 'Content-Type: application/json')
+        fi
+    elif [ -n "$data" ]; then
+        curl_opts+=(--get)
+        curl_opts+=(--data-urlencode "$data")
+    fi
+    if [ -z "$DOCKER_HOST" ];then
+        echo "Error DOCKER_HOST variable not set"
+        return 1
+    fi
+    if [[ "$DOCKER_HOST" == unix://* ]]; then
+        curl_opts+=(--unix-socket ${DOCKER_HOST#unix://})
+        host='http://localhost'
+    else
+        host="http://${DOCKER_HOST#*://}"
+    fi
+    curl "${curl_opts[@]}" ${host}$path
+}
+
+function docker_kill {
+    local id="${1?missing id}"
+    local signal="${2?missing signal}"
+    docker_api "/containers/$id/kill?signal=$signal" "POST"
+}
+
+i=0
+merged_conf=/etc/nginx/conf.d/default.conf
+for c in /etc/nginx/conf.d/default.conf.*; do
+    num=$(grep -n VIRTUAL.HOST.CONFIGS $c |cut -f1 -d:)
+    if [ $i -eq 0 ]; then head -$num $c >$merged_conf; i=1; fi
+    tail -n +$[num+1] $c >>$merged_conf
+done
+
+ver=v$(docker_api "/version" "GET" | jq -r '.ApiVersion')
+containers=$(docker_api "/$ver/containers/json" "GET" 'filters={"name": ["'$1'"]}' | jq -r '[.[] | .Id] | join(" ")')
+#echo "Version: $ver"
+if ! [ -z "${containers:-}" ]; then
+# if running nginx-proxy outside of the swarm
+  for cid in ${containers}; do
+    echo "Sending SIGHUP to $cid..."
+    docker_kill "$cid" SIGHUP
+  done
+else
+  servname=$(docker_api "/$ver/services" "GET" \
+  |jq -r '.[].Spec | select(.TaskTemplate.ContainerSpec.Mounts[].Target|contains("docker.sock")) | select(.TaskTemplate.ContainerSpec.Hostname|contains("'`hostname`'")) | .Name')
+  ips=$(docker_api "/$ver/tasks" "GET" 'filters={"service":["'$servname'"]}' \
+  |jq -r '.[]|select(.Status.State|contains("running"))|.NetworksAttachments|.[].Addresses[]' \
+  |cut -f1 -d/ |tr '\n' ' ')
+  [ -z "$ips" ] && echo "Error: can't get IPs for service '$servname'" && exit 1
+  for ip in $ips; do
+    if nc -z $ip 2375; then
+      id=$(curl -s http://$ip:2375/$ver/containers/json \
+      |jq -r '.[] | select(.Names[] | contains("'$1'")) .Names[]')
+      echo "Sending SIGHUP to $ip:2375/$ver/containers$id ..."
+      curl -s -X POST http://$ip:2375/$ver/containers$id/kill?signal=SIGHUP
+      exit 0
+    fi
+  done
+  echo "Error: no listening IP found among ($ips)"
+    echo "Error: can't get containers for name '$1'"
+    exit 1
+fi

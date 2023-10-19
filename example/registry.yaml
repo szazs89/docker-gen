@@ -1,0 +1,40 @@
+version: '3.7'
+#
+# https://docs.docker.com/registry/deploying/#run-the-registry-as-a-service
+# 
+# requires docker swarm:
+#   docker swarm init ...
+#   docker node update --label-add registry=true nodeX
+#
+services:
+ registry:
+  restart: always
+  image: registry:2
+  deploy:
+    replicas: 1
+    placement:
+      constraints: [ 'node.labels.registry==true' ]
+  ports:
+    - 5000:443
+  environment:
+    - REGISTRY_HTTP_ADDR=0.0.0.0:443
+#    REGISTRY_HTTP_TLS_CERTIFICATE: /certs/domain.crt
+#    REGISTRY_HTTP_TLS_KEY: /certs/domain.key
+#    REGISTRY_AUTH: htpasswd
+#    REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
+#    REGISTRY_AUTH_HTPASSWD_REALM: Registry Realm
+#  volumes:
+#    - /opt/docker/registry:/var/lib/registry
+#    - /path/certs:/certs
+#    - /path/auth:/auth
+  networks:
+    - default
+
+# attach to existing (overlay) net:
+networks:
+  default:
+    external: true
+    name: ext_net_name
+# or create own overlay net:
+#    driver: overlay
+#    attachable: true

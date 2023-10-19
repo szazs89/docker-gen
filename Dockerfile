@@ -1,5 +1,10 @@
-FROM nginxproxy/docker-gen:latest
+#FROM nginxproxy/docker-gen:latest
+FROM jwilder/docker-gen:latest
 
-RUN apk --update add bash curl jq && rm -rf /var/cache/apk/*
+RUN apk --update add bash curl jq netcat-openbsd && rm -rf /var/cache/apk/*
 
-COPY docker-label-sighup /usr/bin/docker-label-sighup
+COPY docker-merge-sighup /usr/local/bin/
+COPY docker-gen.wrapper /usr/local/bin/
+COPY nginx.tmpl /etc/docker-gen/templates/
+
+ENTRYPOINT [ "/usr/local/bin/docker-gen.wrapper" ]

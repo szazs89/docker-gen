@@ -1,0 +1,31 @@
+#!/bin/bash
+
+sock=/tmp/docker.sock
+base=http://localhost
+ver=v$(curl -s --unix-socket $sock $base/version | jq -r '.ApiVersion')
+base=$base/$ver
+ip=$(curl -s --unix-socket $sock $base/info | jq -r '.Swarm.NodeAddr')
+echo "Node: $ip"
+
+# trying to find out whether the container of nginx-proxy to be restarted
+# runs on this host...:
+#
+docker_script=docker-merge-sighup
+proxy=$(echo "$@" |sed -r 's/.*'${docker_script}' +([^ "]+).*/\1/')
+echo "Proxy: $proxy"
+ctnr=$(curl -s --unix-socket $sock $base/containers/json \
+|jq -r '.[]|select(.Names[]|contains("'$proxy'"))|.Names[]')
+echo "Container: '$ctnr'"
+if [ -n "$ctnr" ]; then
+# ... if yes then make docker socket accessible through TCP in this container:
+   fifo=/tmp/nginx-gen.fifo
+   mkfifo $fifo && cat $fifo | nc -U $sock |nc -kl 0.0.0.0 2375 > $fifo &
+fi
+# the last parameter in $@ is /etc/nginx/conf.d/default.conf
+# which is appended with the node ip:
+echo "$@.$ip"
+docker-gen "$@.$ip"
+
+# a separate script should be notified to merge default.conf.*
+# and restart nginx-prox container, e.g.
+# $@=-notify "docker-merge-conf nginx_container" .../nginx.tmplt /etc/nginx/conf.d/default.conf

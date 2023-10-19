@@ -1,54 +1,106 @@
-# docker-gen with dynamic container names support
+# docker-gen with dynamic container names support running on multiple nodes
 
-This is an enhancement to the [docker-gen](https://github.com/jwilder/docker-gen) image that adds a script that can send a SIGHUP signal to a container through the use of a label.
+This is an enhancement to the [docker-gen](https://github.com/jwilder/docker-gen)
+image that adds a script that can send a SIGHUP signal to a container
+running on a different node. either running inside the swarm or standalone.
+This is a modification of [helderco's docker-gen](https://github.com/helderco/docker-gen)
+enhancement.
 
 # The problem
 
-The usual way of using `docker-gen` in conjunction with `docker-letsencrypt-nginx-proxy-companion` using the separate
-container method, is as follows (as per the [docs](https://github.com/JrCs/docker-letsencrypt-nginx-proxy-companion#separate-containers-recommended-method)):
+[Helder Correia's](https://github.com/helderco) enhancement works
+through the use of the label added to the container to be restarted
+(e.g. running the `nginx-proxy`).
 
-```
-$ docker run -d \
-    --name nginx-gen \
-    --volumes-from nginx \
-    -v /path/to/nginx.tmpl:/etc/docker-gen/templates/nginx.tmpl:ro \
-    -v /var/run/docker.sock:/tmp/docker.sock:ro \
-    jwilder/docker-gen \
-    -notify-sighup nginx -watch -only-exposed -wait 5s:30s /etc/docker-gen/templates/nginx.tmpl /etc/nginx/conf.d/default.conf
-```
-
-However, within a Docker Cloud or Swarm Mode based environment we cannot use `-notify-sighup nginx` due to the fact that
-the container names (on the actual nodes) do not match their service names.
-The result is that the `nginx` container (Service) never get's reloaded to take advantage of the generated Nginx configuration.
+However, the container can be accessed on the same node or docker host.
+That is, this method does not work if the containers of the services behind
+the `nginx-proxy` are running on different docker hosts attached together
+with an overlay net of a swarm.
 
 # The solution
 
-Add a label to the container you want to reload, with value `true`. Then, use the bundled `docker-label-sighup`
-script, with the label name as an argument. For example:
+So, the `docker-gen` service is deployed in the swarm running one replica
+(container) on each node of the swarm.
 
-```
-services:
-  nginx:
-    image: nginx:alpine
-    ports:
-      - 80:80
-      - 433:433
-    volumes:
-      - nginx:/etc/nginx/conf.d
-      - nginx:/etc/nginx/certs
-    labels:
-      - com.example.nginx_proxy=true
+## The `docker-gen.wrapper` script
 
-  dockergen:
-    image: ghcr.io/helderco/docker-gen:master
-    command: -notify "docker-label-sighup com.example.nginx_proxy" -watch -only-exposed -wait 10s:30s /etc/docker-gen/templates/nginx.tmpl /etc/nginx/conf.d/default.conf
-    volumes:
-      - nginx:/etc/nginx/conf.d
-      - /var/run/docker.sock:/tmp/docker.sock:ro
-      - ./nginx.tmpl:/etc/docker-gen/templates/nginx.tmpl
+### Generating separated `default.conf` by each replica of `docker-gen`
 
-volumes:
-  nginx:
-```
+The controled `/etc/nginx-proxy/conf.d` folder is accessed through NFS.
+However, the controlling `docker-gen` exe generates different `default.conf`
+files depending upon the node which the container is running on.
+This distinction is made by adding the IP as an extension to the filename
+(e.g. `default.conf.192.168.1.2`).
+These files are updated when the script is invoked as given in the `-notify`
+parameter.
+(Without this modification the `default.conf` file would contain only the
+services of the node where the last modification was detected through
+the docker socket.)
 
-Note the use of `-notify` instead of using `-notify-sighup` to redeploy the service using the bundled script.
+Furthermore, the command parameters of the compose file (used for deploying
+`docker-gen`) are the same on each node, therefore, a `docker-gen.wrapper`
+script is needed before the original docker-gen executable. This script
+determines the IP of the current node and modifies the passed variables with
+it (`default.conf` -> `default.conf.$IP`).
+
+### Exposing `docker.sock` on TCP port 2375
+
+The wrapper script also determines whether the container of `nginx-proxy`
+is running on the current node. In this case it exposes the `/tmp/docker.sock`
+to the 2375 TCP port of the container which the docker daemon can be accessed
+through in order to restart the container of the `nginx-proxy`
+
+   fifo=/tmp/nginx-gen.fifo
+   mkfifo $fifo && cat $fifo | nc -U /tmp/docker.sock |nc -kl 0.0.0.0 2375 > $fifo &
+
+_Nice, isn't it? It is from `man netcat` ;-)_
+
+So, when modification is noticed in the running containers on a node,
+the `docker-gen` exe updates the `/etc/nginx-proxy/conf.d/default.conf.$IP`
+using `/etc/docker-gen/templates/nginx.tmpl` template file and notifies the
+`docker-merge-sighup` script.
+
+## The `docker-merge-sighup` script
+
+### Merging the updated `default.conf.$IP` files
+
+This script merges `default.conf.*` into `default.conf`. Since, there is
+a common _header_ part in each `default.conf.$IP` whose end marked by the
+line containing the `VIRTUAL HOST CONFIGS` string in the template file.
+
+Thus, practically the first file is copied into `default.conf` and the
+lines of the others from the `VIRTUAL HOST CONFIGS` line are appended to it.
+
+### Sending SIGHUP to the node where `nginx-proxy` is running
+
+Finally, the script finds out the IP addresses of the nodes participating
+in the swarm (i.e. every node has to be a manager in order to be able to get
+such information).
+
+After that it scans the port 2375 of the obtained IP addresses using `netcat`
+and determines the Id of the container which runs the `nginx-proxy`
+and sends the SIGHUP.
+
+# Installation
+
+The local image can be built from the `Dockerfile`. It is recommended
+to use a local [registry service](example/registry.yaml).
+
+    docker build -t 127.0.0.1:5000/docker-gen:merge
+
+A compose file (`nginx-stack.yaml`) can be generated by running the
+`make_compose_file.sh` script in the `example` folder. After that
+the `nginx-proxy` and the `docker-gen` services can be deployed into a stack:
+
+    docker stack deploy -c nginx-stack.yaml nginx-stack
+
+The `nginx-proxy` can also be run in a standalone container (outside of the
+swarm). In this case the parameter of the `docker-merge-sighup` script
+must match on `container_name` (as for Swarm Mode, on the name of the service).
+
+# References:
+
+Further similar projects:
+
+* https://github.com/tarasov65536/docker-gen/tree/multiple-enpoints
+  (there is a PR [#548](https://github.com/nginx-proxy/docker-gen/pull/548))
