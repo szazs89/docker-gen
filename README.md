@@ -3,8 +3,8 @@
 This is an enhancement to the [docker-gen](https://github.com/jwilder/docker-gen)
 image that adds a script that can send a SIGHUP signal to a container
 running on a different node. either running inside the swarm or standalone.
-This is a modification of [helderco's docker-gen](https://github.com/helderco/docker-gen)
-enhancement.
+(This is a modification of [helderco's docker-gen](https://github.com/helderco/docker-gen)
+enhancement.)
 
 # The problem
 
@@ -12,7 +12,7 @@ enhancement.
 through the use of the label added to the container to be restarted
 (e.g. running the `nginx-proxy`).
 
-However, the container can be accessed on the same node or docker host.
+However, the container can be accessed on the same node or docker host, only.
 That is, this method does not work if the containers of the services behind
 the `nginx-proxy` are running on different docker hosts attached together
 with an overlay net of a swarm.
@@ -31,9 +31,9 @@ However, the controlling `docker-gen` exe generates different `default.conf`
 files depending upon the node which the container is running on.
 This distinction is made by adding the IP as an extension to the filename
 (e.g. `default.conf.192.168.1.2`).
-These files are updated when the script is invoked as given in the `-notify`
+These files are updated when the script is invoked as given by the `-notify`
 parameter.
-(Without this modification the `default.conf` file would contain only the
+(Without this modification, the `default.conf` file would contain only the
 services of the node where the last modification was detected through
 the docker socket.)
 
@@ -50,13 +50,13 @@ is running on the current node. In this case it exposes the `/tmp/docker.sock`
 to the 2375 TCP port of the container which the docker daemon can be accessed
 through in order to restart the container of the `nginx-proxy`
 
-   fifo=/tmp/nginx-gen.fifo
-   mkfifo $fifo && cat $fifo | nc -U /tmp/docker.sock |nc -kl 0.0.0.0 2375 > $fifo &
+    fifo=/tmp/nginx-gen.fifo
+    mkfifo $fifo && cat $fifo | nc -U /tmp/docker.sock |nc -kl 0.0.0.0 2375 > $fifo &
 
 _Nice, isn't it? It is from `man netcat` ;-)_
 
-So, when modification is noticed in the running containers on a node,
-the `docker-gen` exe updates the `/etc/nginx-proxy/conf.d/default.conf.$IP`
+So, when a modification in the running containers is noticed on a node,
+`docker-gen` exe updates `/etc/nginx-proxy/conf.d/default.conf.$IP`
 using `/etc/docker-gen/templates/nginx.tmpl` template file and notifies the
 `docker-merge-sighup` script.
 
@@ -65,20 +65,22 @@ using `/etc/docker-gen/templates/nginx.tmpl` template file and notifies the
 ### Merging the updated `default.conf.$IP` files
 
 This script merges `default.conf.*` into `default.conf`. Since, there is
-a common _header_ part in each `default.conf.$IP` whose end marked by the
-line containing the `VIRTUAL HOST CONFIGS` string in the template file.
+The first _n_ lines of each `default.conf.$IP` is common (_header_ part).
+Its end is marked by the line containing the `VIRTUAL HOST CONFIGS` string
+in the template file. This is followed by the virtual host specific configuration
+of the detected services.
 
-Thus, practically the first file is copied into `default.conf` and the
-lines of the others from the `VIRTUAL HOST CONFIGS` line are appended to it.
+Thus, practically it is sufficient to copy the first file to `default.conf` and the
+lines of the others from the `VIRTUAL HOST CONFIGS` line to append to it.
 
 ### Sending SIGHUP to the node where `nginx-proxy` is running
 
 Finally, the script finds out the IP addresses of the nodes participating
-in the swarm (i.e. every node has to be a manager in order to be able to get
-such information).
+in the swarm _(i.e. every node has to be a manager in order to be able to get
+such information)._
 
 After that it scans the port 2375 of the obtained IP addresses using `netcat`
-and determines the Id of the container which runs the `nginx-proxy`
+and determines the `Id` of the container which runs the `nginx-proxy`
 and sends the SIGHUP.
 
 # Installation
