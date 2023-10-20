@@ -8,7 +8,8 @@ NGINX_IMAGE=jwilder/nginx-proxy
 NGINX_IMAGE=gesiscss/nginx-shibboleth:v0.2.2
 NGINX_NAME=nginx-shib
 
-# locally built image pushed into local registry:
+DOCKERGEN_IMAGE=szazs89/docker-gen:v0-merge
+# OR locally built image pushed into local registry:
 DOCKERGEN_IMAGE=127.0.0.1:5000/docker-gen:merge
 DOCKERGEN_NAME=docker-gen
 
@@ -96,7 +97,7 @@ services:
           - vhost:/etc/nginx/vhost.d
           - lets:/etc/nginx/certs:ro
           - /var/run/docker.sock:/tmp/docker.sock:ro
-# this can be useful if local modifications are needed:
+# this can be useful if local modifications are needed (assumes autofs):
 #          - /net/${NFS_SERVER}/${NFS_PATH}/nginx.tmpl:/etc/docker-gen/templates/nginx.tmpl:ro
         networks:
           - default
